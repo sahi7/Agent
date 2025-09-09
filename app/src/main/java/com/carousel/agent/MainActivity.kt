@@ -5,12 +5,24 @@ import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
-import androidx.core.content.edit
+import android.view.View
+import android.widget.Button
+import android.widget.TextView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var connectionStatusText: TextView
+    private lateinit var retryButton: Button
+    private val scope = CoroutineScope(Dispatchers.Main)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        connectionStatusText = findViewById(R.id.connection_status_text)
+        retryButton = findViewById(R.id.retry_button)
 
         // Check if device_token exists, else redirect to SetupActivity
         val sharedPrefs = EncryptedSharedPreferences.create(
@@ -41,6 +53,34 @@ class MainActivity : AppCompatActivity() {
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_container, SettingsFragment())
             .commit()
+
+        // Observe connection status from PrintService
+        scope.launch {
+            PrintService.connectionStatus.collect { status ->
+                when (status) {
+                    PrintService.ConnectionStatus.DISCONNECTED -> {
+                        connectionStatusText.text = "Connection failed"
+                        connectionStatusText.visibility = View.VISIBLE
+                        retryButton.visibility = View.VISIBLE
+                    }
+                    PrintService.ConnectionStatus.CONNECTED -> {
+                        connectionStatusText.visibility = View.GONE
+                        retryButton.visibility = View.GONE
+                    }
+                    PrintService.ConnectionStatus.RETRYING -> {
+                        connectionStatusText.text = "Reconnecting..."
+                        connectionStatusText.visibility = View.VISIBLE
+                        retryButton.visibility = View.GONE
+                    }
+                }
+            }
+        }
+
+        retryButton.setOnClickListener {
+            connectionStatusText.text = "Reconnecting..."
+            retryButton.visibility = View.GONE
+            PrintService.handleDisconnection()
+        }
     }
 }
 

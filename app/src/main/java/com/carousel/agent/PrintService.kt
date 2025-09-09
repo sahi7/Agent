@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -37,19 +39,31 @@ class PrintService : Service() {
 
     // Configuration constants
     private val INITIAL_DELAY = 1000L // 1 second
-    private val MAX_DELAY = 30000L // 30 seconds
-    private val MAX_RECONNECT_ATTEMPTS = 5
+    private val MAX_DELAY = 60000L // 60 seconds
+    private val MAX_RECONNECT_ATTEMPTS = 1
     private val BACKOFF_MULTIPLIER = 2.0
     private val JITTER_FACTOR = 0.1 // 10% jitter
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        var webSocket: WebSocket? = null // Shared WebSocket for SettingsFragment
+        var webSocket: WebSocket? = null // Shared WebSocket for PrinterScanner
+        private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
+        val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
+        private var instance: PrintService? = null
+        fun handleDisconnection() {
+            instance?.resetReconnectionState()
+            instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
+        }
+    }
+
+    enum class ConnectionStatus {
+        CONNECTED, DISCONNECTED, RETRYING
     }
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         sharedPrefs = EncryptedSharedPreferences.create(
             "app_prefs",
             MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
@@ -85,7 +99,9 @@ class PrintService : Service() {
                     Log.d("WebSocket", "Connection opened")
                     Log.d("WebSocket", "Response code: ${response.code}")
                     Log.d("WebSocket", "Response headers: ${response.headers}")
+                    PrintService.webSocket = webSocket
                     isConnected = true
+                    _connectionStatus.value = ConnectionStatus.CONNECTED
                     scope.launch {
                         webSocket.send(JSONObject().apply {
                             put("type", "subscribe")
@@ -103,9 +119,14 @@ class PrintService : Service() {
                                 "connected" -> Log.i("WebSocket", "Connection confirmed")
                                 "subscribed" -> Log.i("WebSocket", "Subscribed to branch_$branchId")
                                 "scan.command" -> {
-                                    val scanId = data.getString("scan_id")
-                                    val senderId = data.getString("sender")
-                                    SettingsFragment().scanPrinters(scanId, senderId)
+                                    val payloadObj = when (val payload = data.get("payload")) {
+                                        is String -> JSONObject(payload)
+                                        is JSONObject -> payload
+                                        else -> throw IllegalArgumentException("Unexpected payload type: ${payload.javaClass}")
+                                    }
+                                    val scanId = payloadObj.getString("scan_id")
+                                    val senderId = payloadObj.getString("sender")
+                                    PrinterScanner(this@PrintService, scope, ::savePrinters).scanPrinters(scanId, senderId)
                                 }
                                 "print.command" -> {
                                     try {
@@ -152,7 +173,6 @@ class PrintService : Service() {
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.e("WebSocket", "Failure: ${t.message}")
                     handleDisconnection()
-//                    reconnect()
                 }
             })
         }
@@ -161,7 +181,8 @@ class PrintService : Service() {
     private fun handleDisconnection() {
         Log.w("WebSocket", "Connection lost, initiating reconnection handlers..")
         isConnected = false
-        this.webSocket = null
+        _connectionStatus.value = ConnectionStatus.DISCONNECTED
+        PrintService.webSocket = null
         startReconnection()
     }
 
@@ -172,6 +193,7 @@ class PrintService : Service() {
         }
 
         isReconnecting = true
+        _connectionStatus.value = ConnectionStatus.RETRYING
         reconnectAttempts = 0
 
         reconnectJob?.cancel()
@@ -197,6 +219,8 @@ class PrintService : Service() {
                         continue
                     } else {
                         Log.i("WebSocket", "Reconnection successful on attempt $reconnectAttempts")
+                        _connectionStatus.value = ConnectionStatus.CONNECTED
+                        PrintService.webSocket = webSocket
                         resetReconnectionState()
                         break
                     }
@@ -208,6 +232,8 @@ class PrintService : Service() {
             if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && webSocket == null) {
                 Log.e("WebSocket", "Max reconnection attempts reached. Giving up.")
                 isReconnecting = false
+                _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                PrintService.webSocket = null
                 // Notify UI or take appropriate action
                 notifyReconnectionFailed()
             }
@@ -246,7 +272,9 @@ class PrintService : Service() {
     private suspend fun processPrintJob(job: JSONObject) {
         Log.d("WebSocket", "In printJob processor")
         val printerId = job.optString("printer_id", null)
-        val config = if (printerId != null) getPrinterConfig(printerId) else getDefaultPrinterConfig()
+        val orderId = job.optString("order_number", null)
+        val senderId = job.optString("sender", null)
+        val config = if (printerId != null) getPrinterConfig(printerId) else getDefaultPrinterConfig(orderId, senderId)
         val printer = ReceiptPrinter(this, config)
         try {
             printer.connect()
@@ -266,27 +294,36 @@ class PrintService : Service() {
     }
 
     private fun getPrinterConfig(printerId: String): PrinterConfig {
-        val storedPrintersJson = sharedPrefs.getString("printers", "[]")
-        val jsonArray = JSONArray(storedPrintersJson)
-        for (i in 0 until jsonArray.length()) {
-            val json = jsonArray.getJSONObject(i)
-            if (json.getString("printer_id") == printerId) {
-                return PrinterConfig(
-                    printerId = json.getString("printer_id"),
-                    connectionType = json.getString("connectionType"),
-                    vendorId = json.optString("vendorId", null),
-                    productId = json.optString("productId", null),
-                    ipAddress = json.optString("ipAddress", null),
-                    serialPort = json.optString("serialPort", null),
-                    profile = json.optString("profile", "TM-T88III"),
-                    isDefault = json.optBoolean("isDefault", false)
-                )
+        try{
+            val storedPrintersJson = sharedPrefs.getString("printers", "[]")
+            val jsonArray = JSONArray(storedPrintersJson)
+            for (i in 0 until jsonArray.length()) {
+                val json = jsonArray.getJSONObject(i)
+                if (json.getString("printer_id") == printerId) {
+                    return PrinterConfig(
+                        printerId = json.getString("printer_id"),
+                        connectionType = json.getString("connectionType"),
+                        vendorId = json.optString("vendorId", null),
+                        productId = json.optString("productId", null),
+                        ipAddress = json.optString("ipAddress", null),
+                        serialPort = json.optString("serialPort", null),
+                        profile = json.optString("profile", "TM-T88III"),
+                        isDefault = json.optBoolean("isDefault", false)
+                    )
+                }
             }
+        } catch (e: Exception) {
+            webSocket?.send(JSONObject().apply {
+                put("type", "error")
+//                put("order_id", job.getInt("order_id"))
+                put("status", "failed")
+                put("error", e.message)
+            }.toString())
         }
         throw Exception("Printer not found")
     }
 
-    private fun getDefaultPrinterConfig(): PrinterConfig {
+    private fun getDefaultPrinterConfig(orderId: String, senderId: String): PrinterConfig {
         val storedPrintersJson = sharedPrefs.getString("printers", "[]")
         val jsonArray = JSONArray(storedPrintersJson)
         for (i in 0 until jsonArray.length()) {
@@ -305,6 +342,12 @@ class PrintService : Service() {
                 )
             }
         }
+        webSocket?.send(JSONObject().apply {
+            put("type", "error")
+            put("order_id", orderId)
+            put("sender", senderId)
+            put("status", "failed")
+        }.toString())
         throw Exception("No default printer found")
     }
 
@@ -365,12 +408,32 @@ class PrintService : Service() {
                 put("isDefault", config.isDefault)
             })
         }
-        sharedPrefs.edit().putString("printers", newJsonArray.toString()).apply()
+        savePrinters(printers)
+    }
+
+    private fun savePrinters(newPrinters: List<PrinterConfig>) {
+        val jsonArray = JSONArray()
+        newPrinters.forEach { config ->
+            jsonArray.put(JSONObject().apply {
+                put("printer_id", config.printerId)
+                put("connectionType", config.connectionType)
+                putOpt("vendorId", config.vendorId)
+                putOpt("productId", config.productId)
+                putOpt("ipAddress", config.ipAddress)
+                putOpt("serialPort", config.serialPort)
+                put("profile", config.profile)
+                put("isDefault", config.isDefault)
+            })
+        }
+        sharedPrefs.edit().putString("printers", jsonArray.toString()).apply()
     }
 
     override fun onDestroy() {
         webSocket?.close(1000, "Service stopped")
+        PrintService.webSocket = null
+        _connectionStatus.value = ConnectionStatus.DISCONNECTED
         client.dispatcher.executorService.shutdown()
+        instance = null
         super.onDestroy()
     }
 }
