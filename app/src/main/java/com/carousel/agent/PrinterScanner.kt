@@ -1,7 +1,6 @@
 package com.carousel.agent
 
 import android.content.Context
-import android.content.Intent
 import android.hardware.usb.UsbManager
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -75,7 +74,7 @@ class PrinterScanner(
                 put("profile", config.profile)
             })
         }
-        Log.d("PrinterScanner", "Printer discovered $printersJson")
+        Log.d("PrinterScanner", "Printers discovered $printersJson")
         PrintService.webSocket?.send(JSONObject().apply {
             put("type", "scan_complete")
             put("scan_id", scanId ?: "")
@@ -83,11 +82,6 @@ class PrinterScanner(
             put("count", printers.size)
             put("printers", printersJson)
         }.toString()) ?: Log.e("PrinterScanner", "WebSocket is null, cannot send scan_complete")
-        // Broadcast results to UI
-        val intent = Intent("com.carousel.agent.PRINTER_SCAN_RESULT")
-        intent.putExtra("count", printers.size)
-        Log.d("PrinterScanner", "Sending broadcast with count: ${printers.size}")
-        context.sendBroadcast(intent)
     }
 
     private suspend fun streamDiscoveredPrinter(config: PrinterConfig, scanId: String?, senderId: String?) {

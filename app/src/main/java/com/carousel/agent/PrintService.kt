@@ -40,7 +40,7 @@ class PrintService : Service() {
     // Configuration constants
     private val INITIAL_DELAY = 1000L // 1 second
     private val MAX_DELAY = 60000L // 60 seconds
-    private val MAX_RECONNECT_ATTEMPTS = 1
+    private val MAX_RECONNECT_ATTEMPTS = 3
     private val BACKOFF_MULTIPLIER = 2.0
     private val JITTER_FACTOR = 0.1 // 10% jitter
 
@@ -64,13 +64,7 @@ class PrintService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        sharedPrefs = EncryptedSharedPreferences.create(
-            "app_prefs",
-            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-            this,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+        sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -88,6 +82,10 @@ class PrintService : Service() {
 
     private fun connectWebSocket() {
         scope.launch {
+            if (deviceId.isBlank()) {
+                Log.w("WebSocket", "Skipping connection: deviceId is empty")
+                return@launch  // stop here
+            }
             val request = Request.Builder()
                 .url("ws://${Constants.SERVER_URL}/ws/device/$deviceId/")
                 .header("Authorization", "Token $deviceToken")
@@ -110,32 +108,34 @@ class PrintService : Service() {
                     }
                 }
 
+                private fun parsePayload(data: JSONObject): JSONObject {
+                    return when (val payload = data.get("payload")) {
+                        is String -> JSONObject(payload)
+                        is JSONObject -> payload
+                        else -> throw IllegalArgumentException("Unexpected payload type: ${payload.javaClass}")
+                    }
+                }
+
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     Log.d("WebSocket", "Received message: $text")
                     scope.launch {
                         try {
                             val data = JSONObject(text)
+                            val payloadObj = parsePayload(data)
+                            val senderId = payloadObj.optString("sender")
+                            val printerId = payloadObj.optString("printer_id")
                             when (data.getString("type")) {
-                                "connected" -> Log.i("WebSocket", "Connection confirmed")
                                 "subscribed" -> Log.i("WebSocket", "Subscribed to branch_$branchId")
                                 "scan.command" -> {
-                                    val payloadObj = when (val payload = data.get("payload")) {
-                                        is String -> JSONObject(payload)
-                                        is JSONObject -> payload
-                                        else -> throw IllegalArgumentException("Unexpected payload type: ${payload.javaClass}")
-                                    }
                                     val scanId = payloadObj.getString("scan_id")
-                                    val senderId = payloadObj.getString("sender")
-                                    PrinterScanner(this@PrintService, scope, ::savePrinters).scanPrinters(scanId, senderId)
+                                    PrinterScanner(this@PrintService, scope) { newPrinters ->
+                                        PrinterUtils.savePrinters(this@PrintService, newPrinters)
+                                    }.scanPrinters(scanId, senderId)
                                 }
                                 "print.command" -> {
                                     try {
                                         // Handle both cases: JSONObject or JSON string
-                                        val payloadObj = when (val payload = data.get("payload")) {
-                                            is String -> JSONObject(payload)
-                                            is JSONObject -> payload
-                                            else -> throw IllegalArgumentException("Unexpected payload type: ${payload.javaClass}")
-                                        }
+//                                        val payloadObj = parsePayload(data)
                                         processPrintJob(payloadObj)
                                         webSocket.send(JSONObject().apply {
                                             put("type", "ack")
@@ -146,9 +146,14 @@ class PrintService : Service() {
                                         Log.e("WebSocket", "Error processing print.command payload: ${e.message}", e)
                                     }
                                 }
+                                "default.command" -> PrinterUtils.handleSetDefaultCommand(this@PrintService, printerId, senderId)
+                                "remove.command" -> PrinterUtils.handleRemoveCommand(this@PrintService, printerId, senderId)
                                 "update.command" -> {
                                     updatePrinterConfig(data.getString("printer_id"), data.getJSONObject("config"))
                                 }
+                                "reset.command" -> PrinterUtils.handleResetCommand(this@PrintService, senderId)
+                                "list.command" -> PrinterUtils.handleListCommand(this@PrintService, senderId)
+                                "test.command" -> PrinterUtils.handleTestCommand(this@PrintService, printerId, senderId)
                             }
                         } catch (e: Exception) {
                             Log.e("WebSocket", "Error processing message: ${e.message}")

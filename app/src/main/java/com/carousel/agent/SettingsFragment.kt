@@ -1,9 +1,5 @@
 package com.carousel.agent
 
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
@@ -13,8 +9,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.Toast
-import androidx.annotation.RequiresApi
-import androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -22,10 +16,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONArray
-import org.json.JSONObject
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
-import androidx.core.content.edit
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.collectLatest
 
 class SettingsFragment : Fragment() {
     private lateinit var printerList: RecyclerView
@@ -33,31 +25,11 @@ class SettingsFragment : Fragment() {
     private val printers = mutableListOf<PrinterConfig>()
     private val scope = CoroutineScope(Dispatchers.IO)
     private lateinit var sharedPrefs: SharedPreferences
-    private lateinit var scanReceiver: BroadcastReceiver
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        sharedPrefs = getEncryptedSharedPrefs()
-        // Register broadcast receiver for scan results
-        scanReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                Log.d("SettingsFragment", "Broadcast received: ${intent?.action}")
-                val count = intent?.getIntExtra("count", 0) ?: 0
-                if (context != null) {
-                    loadStoredPrinters()
-                    Toast.makeText(context, "Found $count printers", Toast.LENGTH_SHORT).show()
-                } else {
-                    Log.e("SettingsFragment", "Context is null in onReceive")
-                }
-            }
-        }
-        requireContext().registerReceiver(
-            scanReceiver,
-            IntentFilter("com.carousel.agent.PRINTER_SCAN_RESULT"),
-            Context.RECEIVER_NOT_EXPORTED
-        )
-        Log.d("SettingsFragment", "Broadcast receiver registered")
+        sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(requireContext())
     }
 
     override fun onCreateView(
@@ -70,20 +42,27 @@ class SettingsFragment : Fragment() {
         discoverButton = view.findViewById(R.id.discover_button)
         discoverButton.setOnClickListener {
             scope.launch {
-                PrinterScanner(requireContext(), scope, ::savePrinters).scanPrinters(null, null) // Manual scan
+                PrinterScanner(requireContext(), scope) { newPrinters ->
+                    PrinterUtils.savePrinters(requireContext(), newPrinters)
+                }.scanPrinters(null, null)// Manual scan
+            }
+        }
+        // Collect scan results
+        lifecycleScope.launch {
+            PrinterUtils.scanResultFlow.collectLatest { count ->
+                Log.d("SettingsFragment", "Received scan result with count: $count")
+                loadStoredPrinters()
+                Toast.makeText(requireContext(), "Found $count printers", Toast.LENGTH_SHORT).show()
             }
         }
         loadStoredPrinters()
+        Toast.makeText(requireContext(), "SettingsFragment loaded", Toast.LENGTH_SHORT).show()
         return view
-    }
-
-    override fun onDestroy() {
-        requireContext().unregisterReceiver(scanReceiver)
-        super.onDestroy()
     }
 
     private fun loadStoredPrinters() {
         val storedPrintersJson = sharedPrefs.getString("printers", "[]")
+        Log.d("SettingsFragment", "Loading printers: $storedPrintersJson")
         val jsonArray = JSONArray(storedPrintersJson)
         printers.clear()
         for (i in 0 until jsonArray.length()) {
@@ -99,37 +78,10 @@ class SettingsFragment : Fragment() {
                 isDefault = json.optBoolean("isDefault", false)
             ))
         }
+        Log.d("SettingsFragment", "Loaded ${printers.size} printers")
         activity?.runOnUiThread {
             Log.d("SettingsFragment", "Updating RecyclerView with ${printers.size} printers")
             printerList.adapter?.notifyDataSetChanged()
         } ?: Log.e("SettingsFragment", "Activity is null, cannot update RecyclerView")
     }
-
-    private fun savePrinters(newPrinters: List<PrinterConfig>) {
-        printers.clear()
-        printers.addAll(newPrinters)
-        val jsonArray = JSONArray()
-        printers.forEach { config ->
-            jsonArray.put(JSONObject().apply {
-                put("printer_id", config.printerId)
-                put("connectionType", config.connectionType)
-                putOpt("vendorId", config.vendorId)
-                putOpt("productId", config.productId)
-                putOpt("ipAddress", config.ipAddress)
-                putOpt("serialPort", config.serialPort)
-                put("profile", config.profile)
-                put("isDefault", config.isDefault)
-            })
-        }
-        sharedPrefs.edit { putString("printers", jsonArray.toString()) }
-        Log.d("SettingsFragment", "Saved printers: $jsonArray")
-    }
-
-    private fun getEncryptedSharedPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
-        "app_prefs",
-        MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
-        requireContext(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
 }

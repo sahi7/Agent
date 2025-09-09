@@ -13,6 +13,14 @@
         android:maxLength="6"
         android:inputType="text" />
 
+    <EditText
+        android:id="@+id/device_key_input"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Device Key (6 characters)"
+        android:maxLength="6"
+        android:inputType="text" />
+
     <Button
         android:id="@+id/submit_button"
         android:layout_width="wrap_content"

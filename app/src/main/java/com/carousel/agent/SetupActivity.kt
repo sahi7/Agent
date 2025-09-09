@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import androidx.core.content.edit
 
 class SetupActivity : AppCompatActivity() {
     private val client = OkHttpClient()
@@ -28,6 +29,7 @@ class SetupActivity : AppCompatActivity() {
         setContentView(R.layout.activity_setup)
 
         val deviceIdInput = findViewById<EditText>(R.id.device_id_input)
+        val deviceKeyInput = findViewById<EditText>(R.id.device_key_input)
         val submitButton = findViewById<Button>(R.id.submit_button)
 
         // Check if device_token exists
@@ -39,9 +41,12 @@ class SetupActivity : AppCompatActivity() {
         }
 
         submitButton.setOnClickListener {
-            val deviceId = deviceIdInput.text.toString().trim()
-            if (deviceId.length != 6) {
-                Toast.makeText(this, "Enter a valid 6-character Device ID", Toast.LENGTH_SHORT).show()
+            val deviceIdPart = deviceIdInput.text.toString().trim()
+            val deviceKeyPart = deviceKeyInput.text.toString().trim()
+            val deviceId = deviceIdPart + deviceKeyPart
+//            val deviceId = deviceIdInput.text.toString().trim()
+            if (deviceId.length != 12) {
+                Toast.makeText(this, "Invalid ID or Key", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             scope.launch {
@@ -68,12 +73,12 @@ class SetupActivity : AppCompatActivity() {
                         val deviceToken = deviceObject.getString("device_token")
                         val deviceName = deviceObject.optString("name", "Unknown")
 
-                        sharedPrefs.edit()
-                            .putString("device_id", deviceId)
-                            .putString("branch_id", branchId.toString())
-                            .putString("device_token", deviceToken)
-                            .putString("device_name", deviceName)
-                            .apply()
+                        sharedPrefs.edit {
+                            putString("device_id", deviceId)
+                                .putString("branch_id", branchId.toString())
+                                .putString("device_token", deviceToken)
+                                .putString("device_name", deviceName)
+                        }
                         runOnUiThread {
                             Toast.makeText(this@SetupActivity, "Setup complete", Toast.LENGTH_SHORT).show()
                             startActivity(Intent(this@SetupActivity, MainActivity::class.java))
