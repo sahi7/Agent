@@ -49,50 +49,130 @@ object PrinterUtils {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
 
+    fun getEncryptedAuthPrefs(context: Context): SharedPreferences =
+        EncryptedSharedPreferences.create(
+            "auth_prefs",
+            MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+            context,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+
     fun handleSetDefaultCommand(context: Context, printerId: String, senderId: String) {
-        val sharedPrefs = getEncryptedSharedPrefs(context)
-        val printers = mutableListOf<PrinterConfig>()
-        val storedPrintersJson = sharedPrefs.getString("printers", "[]")
-        val jsonArray = JSONArray(storedPrintersJson)
-        for (i in 0 until jsonArray.length()) {
-            val json = jsonArray.getJSONObject(i)
-            printers.add(json.toPrinterConfig().copy(isDefault = json.getString("printer_id") == printerId))
+        try {
+            val sharedPrefs = getEncryptedSharedPrefs(context)
+            val storedPrintersJson = sharedPrefs.getString("printers", "[]") ?: "[]"
+            val jsonArray = JSONArray(storedPrintersJson)
+            val printers = mutableListOf<PrinterConfig>()
+
+            // Check if printer exists and update default status
+            var printerFound = false
+            for (i in 0 until jsonArray.length()) {
+                val json = jsonArray.getJSONObject(i)
+                val currentPrinterId = json.getString("printer_id")
+                val isDefault = currentPrinterId == printerId
+                if (isDefault) printerFound = true
+                printers.add(json.toPrinterConfig().copy(isDefault = isDefault))
+            }
+
+            if (!printerFound) {
+                // Send error response - printer not found
+                PrintService.webSocket?.send(JSONObject().apply {
+                    put("type", "ack")
+                    put("status", "error")
+                    put("sender", senderId)
+                    put("command", "default")
+                    put("printer_id", printerId)
+                    put("error", "Printer not found")
+                }.toString())
+                return
+            }
+
+            // Save updated printers
+            savePrinters(context, printers)
+
+            // Send success response
+            PrintService.webSocket?.send(JSONObject().apply {
+                put("type", "ack")
+                put("status", "success")
+                put("sender", senderId)
+                put("command", "default")
+                put("printer_id", printerId)
+            }.toString())
+
+        } catch (e: Exception) {
+            // Send error response
+            PrintService.webSocket?.send(JSONObject().apply {
+                put("type", "ack")
+                put("status", "error")
+                put("sender", senderId)
+                put("command", "default")
+                put("printer_id", printerId)
+                put("error", e.message ?: "Unknown error")
+            }.toString())
         }
-        savePrinters(context, printers)
-        PrintService.webSocket?.send(JSONObject().apply {
-            put("type", "ack")
-            put("status", "success")
-            put("sender", senderId)
-            put("command", "default")
-            put("printer_id", printerId)
-        }.toString())
-        Log.i("WebSocket", "Set default printer $printerId")
     }
 
     fun handleRemoveCommand(context: Context, printerId: String, senderId: String) {
-        Log.i("PrinterUtils", "In Remove printer $printerId")
-        val sharedPrefs = getEncryptedSharedPrefs(context)
-        val printers = mutableListOf<PrinterConfig>()
-        val storedPrintersJson = sharedPrefs.getString("printers", "[]")
-        val jsonArray = JSONArray(storedPrintersJson)
-        for (i in 0 until jsonArray.length()) {
-            val json = jsonArray.getJSONObject(i)
-            if (json.getString("printer_id") != printerId) {
-                printers.add(json.toPrinterConfig())
+        try {
+            val sharedPrefs = getEncryptedSharedPrefs(context)
+            val printers = mutableListOf<PrinterConfig>()
+            val storedPrintersJson = sharedPrefs.getString("printers", "[]") ?: "[]"
+            val jsonArray = JSONArray(storedPrintersJson)
+
+            // Check if printer exists
+            var printerFound = false
+            for (i in 0 until jsonArray.length()) {
+                val json = jsonArray.getJSONObject(i)
+                if (json.getString("printer_id") != printerId) {
+                    printers.add(json.toPrinterConfig())
+                } else {
+                    printerFound = true
+                }
             }
+
+            if (!printerFound) {
+                // Send error response - printer not found
+                PrintService.webSocket?.send(JSONObject().apply {
+                    put("type", "ack")
+                    put("status", "error")
+                    put("sender", senderId)
+                    put("command", "remove")
+                    put("printer_id", printerId)
+                    put("error", "Printer not found")
+                }.toString())
+                return
+            }
+
+            // If we removed the default printer and there are still printers, make first one default
+            if (printers.isNotEmpty() && printers.none { it.isDefault }) {
+                printers[0] = printers[0].copy(isDefault = true)
+            }
+
+            savePrinters(context, printers)
+
+            // Send success response
+            PrintService.webSocket?.send(JSONObject().apply {
+                put("type", "ack")
+                put("status", "success")
+                put("sender", senderId)
+                put("command", "remove")
+                put("printer_id", printerId)
+            }.toString())
+
+            Log.i("WebSocket", "Removed printer $printerId")
+
+        } catch (e: Exception) {
+            // Send error response
+            PrintService.webSocket?.send(JSONObject().apply {
+                put("type", "ack")
+                put("status", "error")
+                put("sender", senderId)
+                put("command", "remove")
+                put("printer_id", printerId)
+                put("error", e.message ?: "Unknown error")
+            }.toString())
         }
-        if (printers.isNotEmpty() && printers.none { it.isDefault }) {
-            printers[0] = printers[0].copy(isDefault = true)
-        }
-        savePrinters(context, printers)
-        PrintService.webSocket?.send(JSONObject().apply {
-            put("type", "ack")
-            put("status", "success")
-            put("sender", senderId)
-            put("command", "remove")
-            put("printer_id", printerId)
-        }.toString())
-        Log.i("WebSocket", "Removed printer $printerId")
     }
 
     fun handleResetCommand(context: Context, senderId: String) {

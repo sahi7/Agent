@@ -139,10 +139,20 @@ class PrintService : Service() {
                                         processPrintJob(payloadObj)
                                         webSocket.send(JSONObject().apply {
                                             put("type", "ack")
-                                            put("order_id", payloadObj.getInt("order_id"))
+                                            put("order_number", payloadObj.getInt("order_number"))
+                                            put("command", "print")
+                                            put("sender", senderId)
                                             put("status", "success")
                                         }.toString())
                                     } catch (e: Exception) {
+                                        webSocket.send(JSONObject().apply {
+                                            put("type", "ack")
+                                            put("order_number", payloadObj.getInt("order_number"))
+                                            put("command", "print")
+                                            put("sender", senderId)
+                                            put("status", "failed")
+                                            put("error", e.message)
+                                        }.toString())
                                         Log.e("WebSocket", "Error processing print.command payload: ${e.message}", e)
                                     }
                                 }
@@ -279,18 +289,20 @@ class PrintService : Service() {
         val printerId = job.optString("printer_id", null)
         val orderId = job.optString("order_number", null)
         val senderId = job.optString("sender", null)
-        val config = if (printerId != null) getPrinterConfig(printerId) else getDefaultPrinterConfig(orderId, senderId)
+        val config = if (printerId != null) getPrinterConfig(printerId, senderId) else getDefaultPrinterConfig(orderId, senderId)
         val printer = ReceiptPrinter(this, config)
         try {
             printer.connect()
-            printer.printReceipt(job)
+            printer.printReceipt(this, job)
             Log.i("Printer", "Printed order ${job.getInt("order_id")}")
         } catch (e: Exception) {
             Log.e("Printer", "Print failed: ${e.message}")
             webSocket?.send(JSONObject().apply {
                 put("type", "ack")
-                put("order_id", job.getInt("order_id"))
+                put("order_number", job.getInt("order_number"))
+                put("sender", job.getInt("sender"))
                 put("status", "failed")
+                put("command", "print")
                 put("error", e.message)
             }.toString())
         } finally {
@@ -298,7 +310,7 @@ class PrintService : Service() {
         }
     }
 
-    private fun getPrinterConfig(printerId: String): PrinterConfig {
+    private fun getPrinterConfig(printerId: String, senderId: String): PrinterConfig {
         try{
             val storedPrintersJson = sharedPrefs.getString("printers", "[]")
             val jsonArray = JSONArray(storedPrintersJson)
@@ -319,8 +331,10 @@ class PrintService : Service() {
             }
         } catch (e: Exception) {
             webSocket?.send(JSONObject().apply {
-                put("type", "error")
-//                put("order_id", job.getInt("order_id"))
+                put("type", "ack")
+                put("printer_id", "printerId")
+                put("sender", senderId)
+                put("command", "print")
                 put("status", "failed")
                 put("error", e.message)
             }.toString())
@@ -347,12 +361,6 @@ class PrintService : Service() {
                 )
             }
         }
-        webSocket?.send(JSONObject().apply {
-            put("type", "error")
-            put("order_id", orderId)
-            put("sender", senderId)
-            put("status", "failed")
-        }.toString())
         throw Exception("No default printer found")
     }
 
