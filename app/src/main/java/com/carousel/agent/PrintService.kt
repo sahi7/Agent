@@ -1,12 +1,16 @@
 package com.carousel.agent
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +55,10 @@ class PrintService : Service() {
         private val _connectionStatus = MutableStateFlow(ConnectionStatus.DISCONNECTED)
         val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
         private var instance: PrintService? = null
+        private const val FOREGROUND_NOTIFICATION_ID = 1
+        private const val CONNECT_NOTIFICATION_ID = 2
+        private const val DISCONNECT_NOTIFICATION_ID = 3
+        private const val CHANNEL_ID = "PrintServiceChannel"
         fun handleDisconnection() {
             instance?.resetReconnectionState()
             instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
@@ -65,6 +73,55 @@ class PrintService : Service() {
         super.onCreate()
         instance = this
         sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(this)
+        createNotificationChannel()
+        startForeground(FOREGROUND_NOTIFICATION_ID, buildForegroundNotification())
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Print Service",
+                NotificationManager.IMPORTANCE_DEFAULT // Higher importance for visibility
+            ).apply {
+                description = "Notifications for print service and WebSocket status"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun buildForegroundNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Print Agent")
+            .setContentText("Running in background")
+            .setSmallIcon(R.drawable.ic_printer) // Replace with your icon
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    private fun showConnectionNotification(isConnected: Boolean) {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(if (isConnected) "WebSocket Connected" else "WebSocket Disconnected")
+            .setContentText(if (isConnected) "Connected to print server" else "Disconnected from print server")
+            .setSmallIcon(R.drawable.ic_printer) // Replace with your icon
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true) // Dismiss on tap
+            .build()
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(if (isConnected) CONNECT_NOTIFICATION_ID else DISCONNECT_NOTIFICATION_ID, notification)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -105,6 +162,7 @@ class PrintService : Service() {
                             put("type", "subscribe")
                             put("branch_id", branchId)
                         }.toString())
+                        showConnectionNotification(true)
                     }
                 }
 
@@ -139,7 +197,7 @@ class PrintService : Service() {
                                         processPrintJob(payloadObj)
                                         webSocket.send(JSONObject().apply {
                                             put("type", "ack")
-                                            put("order_number", payloadObj.getInt("order_number"))
+                                            put("order_number", payloadObj.optString("order_number"))
                                             put("command", "print")
                                             put("sender", senderId)
                                             put("status", "success")
@@ -147,7 +205,7 @@ class PrintService : Service() {
                                     } catch (e: Exception) {
                                         webSocket.send(JSONObject().apply {
                                             put("type", "ack")
-                                            put("order_number", payloadObj.getInt("order_number"))
+                                            put("order_number", payloadObj.optString("order_number"))
                                             put("command", "print")
                                             put("sender", senderId)
                                             put("status", "failed")
@@ -198,6 +256,7 @@ class PrintService : Service() {
         isConnected = false
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
         PrintService.webSocket = null
+        showConnectionNotification(false)
         startReconnection()
     }
 
@@ -236,6 +295,7 @@ class PrintService : Service() {
                         Log.i("WebSocket", "Reconnection successful on attempt $reconnectAttempts")
                         _connectionStatus.value = ConnectionStatus.CONNECTED
                         PrintService.webSocket = webSocket
+                        showConnectionNotification(true)
                         resetReconnectionState()
                         break
                     }
@@ -249,6 +309,7 @@ class PrintService : Service() {
                 isReconnecting = false
                 _connectionStatus.value = ConnectionStatus.DISCONNECTED
                 PrintService.webSocket = null
+                showConnectionNotification(false)
                 // Notify UI or take appropriate action
                 notifyReconnectionFailed()
             }

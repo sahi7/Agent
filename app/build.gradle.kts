@@ -80,4 +80,5 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.16")
     implementation("com.github.tony19:logback-android:3.0.0")
     implementation("androidx.security:security-crypto:1.0.0")
+    implementation("androidx.core:core:1.13.1") // For NotificationCompat
 }
