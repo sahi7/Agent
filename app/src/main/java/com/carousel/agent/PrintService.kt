@@ -89,7 +89,7 @@ class PrintService : Service() {
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
-//        connectWebSocket()
+        connectWebSocket()
         return START_STICKY
     }
 
@@ -148,7 +148,7 @@ class PrintService : Service() {
                                     val scanId = payloadObj.getString("scan_id")
                                     PrinterScanner(this@PrintService, scope) { newPrinters ->
                                         PrinterUtils.savePrinters(this@PrintService, newPrinters)
-                                    }.scanPrinters(scanId, senderId)
+                                    }.scanPrinters(scanId, senderId, branchId)
                                 }
                                 "print.command" -> {
                                     try {

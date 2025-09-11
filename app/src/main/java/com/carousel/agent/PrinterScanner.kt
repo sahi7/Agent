@@ -18,7 +18,7 @@ class PrinterScanner(
 ) {
     private val printers = mutableListOf<PrinterConfig>()
 
-    suspend fun scanPrinters(scanId: String?, senderId: String?) {
+    suspend fun scanPrinters(scanId: String?, senderId: String?, branchId: String?) {
         printers.clear()
         // USB Detection
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -79,6 +79,7 @@ class PrinterScanner(
             put("type", "scan_complete")
             put("scan_id", scanId ?: "")
             put("sender", senderId)
+            put("branch_id", branchId)
             put("count", printers.size)
             put("printers", printersJson)
         }.toString()) ?: Log.e("PrinterScanner", "WebSocket is null, cannot send scan_complete")
