@@ -1,0 +1,3 @@
+When submitting (target SDK 34+),
+declare foreground service use in the Play Console form (App Content > Foreground Services).
+Explain: "Maintains WebSocket for real-time print commands in background."

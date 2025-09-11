@@ -1,12 +1,19 @@
 package com.carousel.agent
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import org.json.JSONArray
@@ -15,10 +22,15 @@ import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 object PrinterUtils {
     private val _scanResultFlow = MutableSharedFlow<Int>(replay = 1)
     val scanResultFlow: SharedFlow<Int> = _scanResultFlow
+    private const val CHANNEL_ID = "PrintServiceChannel"
+    private val notificationIdCounter =
+        AtomicInteger(2) // Start from 2 to avoid FOREGROUND_NOTIFICATION_ID=1
+    private var lastNotification: Notification? = null
 
     fun savePrinters(context: Context, newPrinters: List<PrinterConfig>) {
         val sharedPrefs = getEncryptedSharedPrefs(context)
@@ -299,5 +311,61 @@ object PrinterUtils {
             isDefault = optBoolean("is_default", false),
             fingerprint = optString("fingerprint", null)
         )
+    }
+
+    fun sendNotification(
+        context: Context,
+        title: String,
+        text: String,
+        notificationId: Int = notificationIdCounter.getAndIncrement(),
+        isPersistent: Boolean = false
+    ) {
+        // Create notification channel if not exists
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Print Service",
+            NotificationManager.IMPORTANCE_DEFAULT // DEFAULT for visibility
+        ).apply {
+            description = "Notifications for print service and app events"
+        }
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (manager == null) {
+            Log.e("Notification", "NotificationManager is null")
+            return
+        }
+        manager.createNotificationChannel(channel)
+        Log.d("Notification", "Notification channel $CHANNEL_ID created")
+
+        // Build notification
+        val intent = Intent(context, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_printer) // Ensure this exists
+            .setContentIntent(pendingIntent)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(!isPersistent)
+            .build()
+
+        // Store last notification for foreground service access
+        lastNotification = notification
+
+        // Send notification
+        with(NotificationManagerCompat.from(context)) {
+            try {
+                notify(notificationId, notification)
+                Log.d("Notification", "Posted notification $notificationId: $title")
+            } catch (e: SecurityException) {
+                Log.e("Notification", "Permission denied: ${e.message}")
+            }
+        }
+    }
+
+    fun getLastNotification(): Notification {
+        return lastNotification ?: throw IllegalStateException("No notification available")
     }
 }

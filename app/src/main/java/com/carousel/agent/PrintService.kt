@@ -1,16 +1,10 @@
 package com.carousel.agent
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.SharedPreferences
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,6 +21,7 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.math.pow
 
 class PrintService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -56,9 +51,6 @@ class PrintService : Service() {
         val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
         private var instance: PrintService? = null
         private const val FOREGROUND_NOTIFICATION_ID = 1
-        private const val CONNECT_NOTIFICATION_ID = 2
-        private const val DISCONNECT_NOTIFICATION_ID = 3
-        private const val CHANNEL_ID = "PrintServiceChannel"
         fun handleDisconnection() {
             instance?.resetReconnectionState()
             instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
@@ -73,55 +65,19 @@ class PrintService : Service() {
         super.onCreate()
         instance = this
         sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(this)
-        createNotificationChannel()
-        startForeground(FOREGROUND_NOTIFICATION_ID, buildForegroundNotification())
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Print Service",
-                NotificationManager.IMPORTANCE_DEFAULT // Higher importance for visibility
-            ).apply {
-                description = "Notifications for print service and WebSocket status"
-            }
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+        try {
+            PrinterUtils.sendNotification(
+                context = this,
+                title = "Print Agent",
+                text = "Running in background",
+                notificationId = FOREGROUND_NOTIFICATION_ID,
+                isPersistent = true // Persistent for foreground service
+            )
+            startForeground(FOREGROUND_NOTIFICATION_ID, PrinterUtils.getLastNotification())
+            Log.d("PrintService", "Foreground notification started with ID $FOREGROUND_NOTIFICATION_ID")
+        } catch (e: Exception) {
+            Log.e("PrintService", "Failed to start foreground: ${e.message}")
         }
-    }
-
-    private fun buildForegroundNotification(): Notification {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Print Agent")
-            .setContentText("Running in background")
-            .setSmallIcon(R.drawable.ic_printer) // Replace with your icon
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
-    }
-
-    private fun showConnectionNotification(isConnected: Boolean) {
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(if (isConnected) "WebSocket Connected" else "WebSocket Disconnected")
-            .setContentText(if (isConnected) "Connected to print server" else "Disconnected from print server")
-            .setSmallIcon(R.drawable.ic_printer) // Replace with your icon
-            .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true) // Dismiss on tap
-            .build()
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(if (isConnected) CONNECT_NOTIFICATION_ID else DISCONNECT_NOTIFICATION_ID, notification)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -133,7 +89,7 @@ class PrintService : Service() {
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
-        connectWebSocket()
+//        connectWebSocket()
         return START_STICKY
     }
 
@@ -162,7 +118,11 @@ class PrintService : Service() {
                             put("type", "subscribe")
                             put("branch_id", branchId)
                         }.toString())
-                        showConnectionNotification(true)
+                        PrinterUtils.sendNotification(
+                            context = this@PrintService,
+                            title = "WebSocket Connected",
+                            text = "Connected to print server"
+                        )
                     }
                 }
 
@@ -256,7 +216,11 @@ class PrintService : Service() {
         isConnected = false
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
         PrintService.webSocket = null
-        showConnectionNotification(false)
+        PrinterUtils.sendNotification(
+            context = this@PrintService,
+            title = "WebSocket Disconnected",
+            text = "Disconnected from print server"
+        )
         startReconnection()
     }
 
@@ -269,6 +233,11 @@ class PrintService : Service() {
         isReconnecting = true
         _connectionStatus.value = ConnectionStatus.RETRYING
         reconnectAttempts = 0
+        PrinterUtils.sendNotification(
+            context = this@PrintService,
+            title = "WebSocket Connecting",
+            text = "Establishing connection to print server"
+        )
 
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
@@ -295,7 +264,11 @@ class PrintService : Service() {
                         Log.i("WebSocket", "Reconnection successful on attempt $reconnectAttempts")
                         _connectionStatus.value = ConnectionStatus.CONNECTED
                         PrintService.webSocket = webSocket
-                        showConnectionNotification(true)
+                        PrinterUtils.sendNotification(
+                            context = this@PrintService,
+                            title = "WebSocket Connected",
+                            text = "Connected to print server"
+                        )
                         resetReconnectionState()
                         break
                     }
@@ -309,7 +282,6 @@ class PrintService : Service() {
                 isReconnecting = false
                 _connectionStatus.value = ConnectionStatus.DISCONNECTED
                 PrintService.webSocket = null
-                showConnectionNotification(false)
                 // Notify UI or take appropriate action
                 notifyReconnectionFailed()
             }
@@ -318,7 +290,7 @@ class PrintService : Service() {
 
     private fun calculateDelay(attempt: Int): Long {
         // Exponential backoff with jitter
-        val exponentialDelay = (INITIAL_DELAY * Math.pow(BACKOFF_MULTIPLIER, (attempt - 1).toDouble())).toLong()
+        val exponentialDelay = (INITIAL_DELAY * BACKOFF_MULTIPLIER.pow((attempt - 1).toDouble())).toLong()
         val cappedDelay = minOf(exponentialDelay, MAX_DELAY)
 
         // Add jitter to prevent thundering herd

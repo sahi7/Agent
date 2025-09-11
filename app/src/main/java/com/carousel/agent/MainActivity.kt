@@ -1,6 +1,9 @@
 package com.carousel.agent
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -8,6 +11,9 @@ import androidx.security.crypto.MasterKeys
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,6 +29,13 @@ class MainActivity : AppCompatActivity() {
 
         connectionStatusText = findViewById(R.id.connection_status_text)
         retryButton = findViewById(R.id.retry_button)
+
+        // Request notification permission for Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
 
         // Check if device_token exists, else redirect to SetupActivity
         val sharedPrefs = EncryptedSharedPreferences.create(
@@ -80,6 +93,17 @@ class MainActivity : AppCompatActivity() {
             connectionStatusText.text = "Reconnecting..."
             retryButton.visibility = View.GONE
             PrintService.handleDisconnection()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 101) {
+            if ( (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)) {
+                Toast.makeText(this, "Notifications permission required for print service", Toast.LENGTH_LONG).show()
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                intent.data = android.net.Uri.fromParts("package", packageName, null)
+            }
         }
     }
 }
