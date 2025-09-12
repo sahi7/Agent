@@ -77,9 +77,9 @@ class PrinterScanner(
         Log.d("PrinterScanner", "Printers discovered $printersJson")
         PrintService.webSocket?.send(JSONObject().apply {
             put("type", "scan_complete")
+            put("branch_id", branchId ?: "")
             put("scan_id", scanId ?: "")
-            put("sender", senderId)
-            put("branch_id", branchId)
+            put("sender", senderId ?: "")
             put("count", printers.size)
             put("printers", printersJson)
         }.toString()) ?: Log.e("PrinterScanner", "WebSocket is null, cannot send scan_complete")

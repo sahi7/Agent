@@ -20,6 +20,8 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
@@ -34,7 +36,9 @@ class PrintService : Service() {
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
     private var isConnected = false
+    private var isTokenSet = false
     private lateinit var sharedPrefs: SharedPreferences
+    private lateinit var authPrefs: SharedPreferences
 
     // Configuration constants
     private val INITIAL_DELAY = 1000L // 1 second
@@ -51,6 +55,12 @@ class PrintService : Service() {
         val connectionStatus: StateFlow<ConnectionStatus> = _connectionStatus
         private var instance: PrintService? = null
         private const val FOREGROUND_NOTIFICATION_ID = 1
+
+        // For token refresh
+//        private const val TOKEN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
+        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 30min
+        private const val TOKEN_EXPIRY_THRESHOLD_HOURS = 24L // Refresh if within 24 hours
+        private const val MAX_BACKOFF_MS = 30000L // 30 seconds max backoff
         fun handleDisconnection() {
             instance?.resetReconnectionState()
             instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
@@ -65,6 +75,7 @@ class PrintService : Service() {
         super.onCreate()
         instance = this
         sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(this)
+        authPrefs = PrinterUtils.getEncryptedAuthPrefs(this)
         try {
             PrinterUtils.sendNotification(
                 context = this,
@@ -78,6 +89,7 @@ class PrintService : Service() {
         } catch (e: Exception) {
             Log.e("PrintService", "Failed to start foreground: ${e.message}")
         }
+        startTokenExpiryCheck()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -104,7 +116,7 @@ class PrintService : Service() {
                 .header("Authorization", "Token $deviceToken")
                 .addHeader("Device-Id", deviceId)
                 .build()
-            Log.d("WebSocket", "Connecting to URL: ${request.url}")
+            Log.d("WebSocket", "Connecting to URL: ${request.url} with: $deviceId - $deviceToken")
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d("WebSocket", "Connection opened")
@@ -182,6 +194,7 @@ class PrintService : Service() {
                                 "reset.command" -> PrinterUtils.handleResetCommand(this@PrintService, senderId)
                                 "list.command" -> PrinterUtils.handleListCommand(this@PrintService, senderId)
                                 "test.command" -> PrinterUtils.handleTestCommand(this@PrintService, printerId, senderId)
+                                "token.refresh" -> handleTokenRefreshed(data)
                             }
                         } catch (e: Exception) {
                             Log.e("WebSocket", "Error processing message: ${e.message}")
@@ -200,7 +213,7 @@ class PrintService : Service() {
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.i("WebSocket", "Connection closed - Code: $code, Reason: $reason")
-                    handleDisconnection()
+//                    handleDisconnection()
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -472,6 +485,72 @@ class PrintService : Service() {
             })
         }
         sharedPrefs.edit().putString("printers", jsonArray.toString()).apply()
+    }
+
+    private fun startTokenExpiryCheck() {
+        scope.launch {
+            var backoffMs = 1000L
+            while (true) {
+                if (webSocket != null && !isTokenSet) {
+                    checkTokenExpiry()
+//                    backoffMs = 1000L // Reset backoff on success
+                } else {
+                    Log.w("WebSocket", "WebSocket disconnected, deferring token check")
+                    backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+                }
+                delay(TOKEN_CHECK_INTERVAL_MS)
+//                delay(TOKEN_CHECK_INTERVAL_MS.coerceAtMost(backoffMs))
+            }
+        }
+    }
+
+    private suspend fun checkTokenExpiry() {
+        val expiryDateStr = authPrefs.getString("expiry_date", null) ?: return
+        Log.e("WebSocket", "expiry_date: $expiryDateStr")
+        try {
+            val expiryDate = ZonedDateTime.parse(expiryDateStr, DateTimeFormatter.ISO_ZONED_DATE_TIME)
+            val now = ZonedDateTime.now()
+            if (java.time.Duration.between(now, expiryDate).toHours() <= TOKEN_EXPIRY_THRESHOLD_HOURS) {
+                Log.i("WebSocket", "Token nearing expiry, requesting refresh")
+                webSocket?.send(JSONObject().apply {
+                    put("type", "token_refresh")
+                    put("device_id", deviceId)
+                }.toString())
+                isTokenSet = false
+            } else {
+                isTokenSet = true  // Set to true if not nearing expiry
+            }
+        } catch (e: Exception) {
+            Log.e("WebSocket", "Failed to parse expiry_date: ${e.message}")
+            isTokenSet = false
+        }
+    }
+
+    private suspend fun handleTokenRefreshed(data: JSONObject) {
+        val newToken = data.getString("device_token")
+        val newExpiryDate = data.optString("expiry_date", "")
+        if (newExpiryDate.isNotEmpty()) {
+            try {
+                ZonedDateTime.parse(newExpiryDate, DateTimeFormatter.ISO_ZONED_DATE_TIME)
+                authPrefs.edit().apply {
+                    putString("device_token", newToken)
+                    putString("expiry_date", newExpiryDate)
+                    apply()
+                }
+                deviceToken = newToken
+                isTokenSet = true
+                // Confirm saved token
+                val savedToken = sharedPrefs.getString("device_token", null)
+                Log.i("WebSocket", "Saved device_token in sharedPrefs: $savedToken")
+                Log.i("WebSocket", "Token refreshed, new expiry: $newExpiryDate")
+            } catch (e: Exception) {
+                Log.e("WebSocket", "Invalid expiry_date in token_refreshed: ${e.message}")
+                isTokenSet = false
+            }
+        } else {
+            Log.e("WebSocket", "No expiry_date in token_refreshed response, ignoring")
+            isTokenSet = false
+        }
     }
 
     override fun onDestroy() {

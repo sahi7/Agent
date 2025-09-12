@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="nav_drawer_width_phone">0.9</dimen>
+    <dimen name="nav_drawer_width_tablet">280dp</dimen>
+    <dimen name="nav_edge_swipe_width">20dp</dimen>
+</resources>

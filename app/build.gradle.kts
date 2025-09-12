@@ -81,4 +81,7 @@ dependencies {
     implementation("com.github.tony19:logback-android:3.0.0")
     implementation("androidx.security:security-crypto:1.0.0")
     implementation("androidx.core:core:1.13.1") // For NotificationCompat
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.9.0")
+    implementation("androidx.drawerlayout:drawerlayout:1.2.0")
 }

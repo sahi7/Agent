@@ -71,6 +71,7 @@ class SetupActivity : AppCompatActivity() {
                         val branchObject = json.getJSONObject("branch")
                         val deviceObject = json.getJSONObject("device")
                         Log.d("Setup", "Dev OBJ: $deviceObject")
+                        Log.d("Setup", "Dev OBJ: $branchObject")
 
                         val branchId = branchObject.getString("branch_id")
                         val branchName = branchObject.getString("name")
@@ -78,7 +79,8 @@ class SetupActivity : AppCompatActivity() {
                         val branchCurrency = branchObject.getString("currency")
                         val branchTimezone = branchObject.getString("timezone")
                         val logoUrl = branchObject.optString("logo_url", null)
-                        if (logoUrl != null) {
+                        if (logoUrl != null && logoUrl != "null") {
+                            Log.d("Setup", "iN lOGO: $logoUrl")
                             // Download and save image
                             val request = Request.Builder().url(logoUrl).build()
                             val response = client.newCall(request).execute()
@@ -91,12 +93,14 @@ class SetupActivity : AppCompatActivity() {
 
                         val deviceId = deviceObject.getString("device_id")
                         val deviceToken = deviceObject.getString("device_token")
+                        val expiryDate = deviceObject.getString("expiry_date")
                         val deviceName = deviceObject.optString("name", "Unknown")
 
                         sharedPrefs.edit {
                             putString("device_id", deviceId)
                             putString("branch_id", branchId.toString())
                             putString("device_token", deviceToken)
+                            putString("expiry_date", expiryDate)
                             putString("device_name", deviceName)
                             putString("branch_name", branchName)
                             putString("branch_address", branchAddress)

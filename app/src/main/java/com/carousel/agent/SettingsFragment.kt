@@ -1,7 +1,6 @@
 package com.carousel.agent
 
 import android.content.SharedPreferences
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -25,11 +24,15 @@ class SettingsFragment : Fragment() {
     private val printers = mutableListOf<PrinterConfig>()
     private val scope = CoroutineScope(Dispatchers.IO)
     private lateinit var sharedPrefs: SharedPreferences
+    private lateinit var authPrefs: SharedPreferences
+    private var branchId: String = ""
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sharedPrefs = PrinterUtils.getEncryptedSharedPrefs(requireContext())
+        authPrefs = PrinterUtils.getEncryptedAuthPrefs(requireContext())
+        branchId = authPrefs.getString("branch_id", "").toString()
     }
 
     override fun onCreateView(
@@ -44,7 +47,7 @@ class SettingsFragment : Fragment() {
             scope.launch {
                 PrinterScanner(requireContext(), scope) { newPrinters ->
                     PrinterUtils.savePrinters(requireContext(), newPrinters)
-                }.scanPrinters(null, null)// Manual scan
+                }.scanPrinters(null, null, branchId)// Manual scan
             }
         }
         // Collect scan results
