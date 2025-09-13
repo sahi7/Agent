@@ -112,7 +112,7 @@ class PrintService : Service() {
                 return@launch  // stop here
             }
             val request = Request.Builder()
-                .url("ws://${Constants.SERVER_URL}/ws/device/$deviceId/")
+                .url("${Constants.WEBSOCKET_SCHEME}${Constants.SERVER_URL}/ws/device/$deviceId/")
                 .header("Authorization", "Token $deviceToken")
                 .addHeader("Device-Id", deviceId)
                 .build()

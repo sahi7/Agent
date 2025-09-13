@@ -56,7 +56,7 @@ class SetupActivity : AppCompatActivity() {
             scope.launch {
                 try {
                     val request = Request.Builder()
-                        .url("http://${Constants.SERVER_URL}/api/hardware/register-device/")
+                        .url("${Constants.SERVER_SCHEME}${Constants.SERVER_URL}/api/hardware/register-device/")
                         .post(
                             JSONObject()
                                 .put("device_id", deviceId)
@@ -80,14 +80,21 @@ class SetupActivity : AppCompatActivity() {
                         val branchTimezone = branchObject.getString("timezone")
                         val logoUrl = branchObject.optString("logo_url", null)
                         if (logoUrl != null && logoUrl != "null") {
-                            Log.d("Setup", "iN lOGO: $logoUrl")
+                            val fullLogoUrl = "${Constants.SERVER_SCHEME}${Constants.SERVER_URL}${logoUrl.replace("\\", "")}"
+                            Log.d("Setup", "iN lOGO: $logoUrl - Full: $fullLogoUrl")
                             // Download and save image
-                            val request = Request.Builder().url(logoUrl).build()
+                            val request = Request.Builder().url(fullLogoUrl).build()
                             val response = client.newCall(request).execute()
 
                             if (response.isSuccessful) {
-                                val bytes = response.body.bytes()
-                                saveImageToPrefs(this@SetupActivity, bytes)
+                                val bytes = response.body?.bytes()
+                                if (bytes != null) {
+                                    saveImageToPrefs(this@SetupActivity, bytes)
+                                } else {
+                                    Log.e("SetupActivity", "Response body is null")
+                                }
+                            } else {
+                                Log.e("SetupActivity", "Request failed: ${response.code} - ${response.message}")
                             }
                         }
 
@@ -120,6 +127,7 @@ class SetupActivity : AppCompatActivity() {
                 } catch (e: Exception) {
                     runOnUiThread {
                         Toast.makeText(this@SetupActivity, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        Log.e("Setup", "${e.message}")
                     }
                 }
             }

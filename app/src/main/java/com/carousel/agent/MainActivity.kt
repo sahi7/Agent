@@ -4,6 +4,7 @@ import android.content.Context
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.os.Vibrator
@@ -22,6 +23,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import android.widget.Button
 import com.google.android.material.navigation.NavigationView
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -30,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var connectionStatusText: TextView
@@ -70,7 +73,33 @@ class MainActivity : AppCompatActivity() {
         // Set up header with device name
         val headerView = navView.getHeaderView(0)
         val deviceNameText = headerView.findViewById<TextView>(R.id.device_name)
+        val logoImageView = headerView.findViewById<ImageView>(R.id.branch_logo)
         deviceNameText.text = sharedPrefs.getString("device_name", "Device")
+        val logoPath = sharedPrefs.getString("branch_logo_path", null)
+        android.util.Log.d("MainActivity", "Logo from prefs: $logoPath")
+        if (logoPath != null) {
+            try {
+                val file = File(logoPath)
+                if (file.exists()) {
+                    val bitmap = BitmapFactory.decodeFile(logoPath)
+                    logoImageView.setImageBitmap(bitmap)
+                    logoImageView.visibility = View.VISIBLE
+                } else {
+                    logoImageView.visibility = View.GONE
+                    android.util.Log.e("MainActivity", "Logo file not found at $logoPath")
+                }
+            } catch (e: Exception) {
+                logoImageView.visibility = View.GONE
+                android.util.Log.e("MainActivity", "Error loading logo: ${e.message}", e)
+            }
+        } else {
+            logoImageView.visibility = View.GONE
+        }
+
+        // Set up close button in header
+        headerView.findViewById<View>(R.id.close_button).setOnClickListener {
+            closeDrawerWithHaptic()
+        }
 
         // Set up close button in header
         headerView.findViewById<View>(R.id.close_button).setOnClickListener {

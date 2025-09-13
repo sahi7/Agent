@@ -21,6 +21,15 @@
         android:contentDescription="Device name" />
 
     <ImageView
+        android:id="@+id/branch_logo"
+        android:layout_width="100dp"
+        android:layout_height="100dp"
+        android:scaleType="centerCrop"
+        android:visibility="gone"
+        android:contentDescription="Branch logo"
+        android:layout_marginBottom="8dp" />
+
+    <ImageView
         android:id="@+id/close_button"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
