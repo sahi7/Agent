@@ -10,7 +10,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.Menu
 import android.view.MenuItem
+import android.view.MotionEvent
 import android.view.View
+import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.GravityCompat
@@ -36,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var navView: NavigationView
     private lateinit var toolbar: Toolbar
+    private lateinit var toggle: ActionBarDrawerToggle
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +60,13 @@ class MainActivity : AppCompatActivity() {
         drawerLayout = findViewById(R.id.drawer_layout)
         navView = findViewById(R.id.nav_view)
 
+        // Set up ActionBarDrawerToggle
+        toggle = ActionBarDrawerToggle(
+            this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close
+        )
+        drawerLayout.addDrawerListener(toggle)
+        toggle.syncState()
+
         // Set up header with device name
         val headerView = navView.getHeaderView(0)
         val deviceNameText = headerView.findViewById<TextView>(R.id.device_name)
@@ -72,9 +82,7 @@ class MainActivity : AppCompatActivity() {
             when (menuItem.itemId) {
                 R.id.nav_reset -> {
                     scope.launch {
-                        PrintService.webSocket?.send(org.json.JSONObject().apply {
-                            put("type", "reset.command")
-                        }.toString())
+                        PrinterUtils.handleResetCommand(this@MainActivity, null)
                     }
                     closeDrawerWithHaptic()
                     true
@@ -82,23 +90,20 @@ class MainActivity : AppCompatActivity() {
                 else -> false
             }
         }
-        // Restrict swipe to left edge (20dp)
-        drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
+
+        // Handle drawer slide for content push
         drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
             override fun onDrawerSlide(drawerView: View, slideOffset: Float) {
-                // Push content with drawer
                 val content = findViewById<View>(R.id.content_frame)
                 content.translationX = drawerView.width * slideOffset
             }
 
             override fun onDrawerOpened(drawerView: View) {
                 performHapticFeedback()
-                supportActionBar?.setHomeAsUpIndicator(R.drawable.ic_arrow_back)
             }
 
             override fun onDrawerClosed(drawerView: View) {
                 performHapticFeedback()
-                supportActionBar?.setHomeAsUpIndicator(R.drawable.ic_menu)
             }
         })
 
@@ -124,8 +129,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-
-//        sharedPrefs.edit { clear() }
         // Check if device_token exists, else redirect to SetupActivity
         val deviceToken = sharedPrefs.getString("device_token", null)
         if (deviceToken == null) {
@@ -134,7 +137,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Start PrintService with branch_id and device_token
         // Start PrintService only if no WebSocket connection exists
         if (PrintService.webSocket == null) {
             val branchId = sharedPrefs.getString("branch_id", "1") ?: "1"
@@ -147,9 +149,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Load SettingsFragment
-        supportFragmentManager.beginTransaction()
-            .replace(R.id.fragment_container, SettingsFragment())
-            .commit()
+        if (savedInstanceState == null) {
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.content_frame, SettingsFragment())
+                .commit()
+        }
 
         // Observe connection status from PrintService
         scope.launch {
@@ -182,12 +186,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 101) {
-            if ( (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)) {
-                Toast.makeText(this, "Notifications permission required for print service", Toast.LENGTH_LONG).show()
-                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                intent.data = android.net.Uri.fromParts("package", packageName, null)
-            }
+        if (requestCode == 101 && (grantResults.isEmpty() || grantResults[0] != PackageManager.PERMISSION_GRANTED)) {
+            Toast.makeText(this, "Notifications permission required for print service", Toast.LENGTH_LONG).show()
+            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = android.net.Uri.fromParts("package", packageName, null)
+            startActivity(intent)
         }
     }
 
@@ -197,17 +200,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            android.R.id.home -> {
-                if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
-                    closeDrawerWithHaptic()
-                } else {
-                    drawerLayout.openDrawer(GravityCompat.START)
-                    performHapticFeedback()
-                }
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
+        return if (toggle.onOptionsItemSelected(item)) {
+            true
+        } else {
+            super.onOptionsItemSelected(item)
         }
     }
 
@@ -226,3 +222,14 @@ class MainActivity : AppCompatActivity() {
     }
 }
 
+// Custom DrawerLayout to restrict swipe-to-open to 20dp edge
+class CustomDrawerLayout(context: Context, attrs: android.util.AttributeSet?) : DrawerLayout(context, attrs) {
+    private val edgeSize = context.resources.getDimensionPixelSize(R.dimen.nav_edge_swipe_width)
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.action == MotionEvent.ACTION_DOWN && ev.x > edgeSize) {
+            return false
+        }
+        return super.onInterceptTouchEvent(ev)
+    }
+}

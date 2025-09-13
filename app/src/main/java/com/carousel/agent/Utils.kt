@@ -187,7 +187,7 @@ object PrinterUtils {
         }
     }
 
-    fun handleResetCommand(context: Context, senderId: String) {
+    fun handleResetCommand(context: Context, senderId: String?) {
         clearAllSharedPrefs(context)
         PrintService.webSocket?.send(JSONObject().apply {
             put("type", "ack")
@@ -221,6 +221,11 @@ object PrinterUtils {
         Handler(Looper.getMainLooper()).postDelayed({
             context.startService(serviceIntent)
         }, 200) // 200ms delay
+        sendNotification(
+            context = context,
+            title = "Service Reboot",
+            text = "Print Service has been rebooted, restart the app to load defaults"
+        )
     }
 
     fun handleListCommand(context: Context, senderId: String) {
