@@ -58,7 +58,7 @@ class PrintService : Service() {
 
         // For token refresh
 //        private const val TOKEN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
-        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 30min
+        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 15min
         private const val TOKEN_EXPIRY_THRESHOLD_HOURS = 24L // Refresh if within 24 hours
         private const val MAX_BACKOFF_MS = 30000L // 30 seconds max backoff
         fun handleDisconnection() {
@@ -489,14 +489,14 @@ class PrintService : Service() {
 
     private fun startTokenExpiryCheck() {
         scope.launch {
-            var backoffMs = 1000L
+//            var backoffMs = 1000L
             while (true) {
                 if (webSocket != null && !isTokenSet) {
                     checkTokenExpiry()
 //                    backoffMs = 1000L // Reset backoff on success
                 } else {
-                    Log.w("WebSocket", "WebSocket disconnected, deferring token check")
-                    backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
+                    Log.w("WebSocket", "WebSocket disconnected, deferring token check - isTokenSet: $isTokenSet")
+//                    backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
                 }
                 delay(TOKEN_CHECK_INTERVAL_MS)
 //                delay(TOKEN_CHECK_INTERVAL_MS.coerceAtMost(backoffMs))
@@ -538,11 +538,12 @@ class PrintService : Service() {
                     apply()
                 }
                 deviceToken = newToken
-                isTokenSet = true
+//                isTokenSet = true
                 // Confirm saved token
-                val savedToken = sharedPrefs.getString("device_token", null)
+                val savedToken = authPrefs.getString("device_token", null)
+                val exp = authPrefs.getString("expiry_date", null)
                 Log.i("WebSocket", "Saved device_token in sharedPrefs: $savedToken")
-                Log.i("WebSocket", "Token refreshed, new expiry: $newExpiryDate")
+                Log.i("WebSocket", "Token refreshed, new expiry: $exp")
             } catch (e: Exception) {
                 Log.e("WebSocket", "Invalid expiry_date in token_refreshed: ${e.message}")
                 isTokenSet = false

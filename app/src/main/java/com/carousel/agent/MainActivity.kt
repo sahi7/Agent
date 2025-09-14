@@ -252,13 +252,14 @@ class MainActivity : AppCompatActivity() {
 }
 
 // Custom DrawerLayout to restrict swipe-to-open to 20dp edge
-class CustomDrawerLayout(context: Context, attrs: android.util.AttributeSet?) : DrawerLayout(context, attrs) {
-    private val edgeSize = context.resources.getDimensionPixelSize(R.dimen.nav_edge_swipe_width)
-
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.action == MotionEvent.ACTION_DOWN && ev.x > edgeSize) {
-            return false
-        }
-        return super.onInterceptTouchEvent(ev)
-    }
-}
+//class CustomDrawerLayout(context: Context, attrs: android.util.AttributeSet?) : DrawerLayout(context, attrs) {
+//    private val edgeSize = context.resources.getDimensionPixelSize(R.dimen.nav_edge_swipe_width)
+//
+//    override fun onInterceptTouchEvent(ev: MotionEvent?): Boolean {
+//        ev ?: return false  // Null safety for ev
+//        if (ev.action == MotionEvent.ACTION_DOWN && ev.x > edgeSize) {
+//            return false
+//        }
+//        return super.onInterceptTouchEvent(ev)
+//    }
+//}
