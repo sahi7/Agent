@@ -209,7 +209,9 @@ class MainActivity : AppCompatActivity() {
         retryButton.setOnClickListener {
             connectionStatusText.text = "Reconnecting..."
             retryButton.visibility = View.GONE
-            PrintService.handleDisconnection()
+            scope.launch {
+                PrintService.handleDisconnection()
+            }
         }
     }
 

@@ -36,7 +36,7 @@ class PrintService : Service() {
     private var reconnectAttempts = 0
     private var reconnectJob: Job? = null
     private var isConnected = false
-    private var isTokenSet = false
+    private var nearExpiry = false
     private lateinit var sharedPrefs: SharedPreferences
     private lateinit var authPrefs: SharedPreferences
 
@@ -46,6 +46,14 @@ class PrintService : Service() {
     private val MAX_RECONNECT_ATTEMPTS = 3
     private val BACKOFF_MULTIPLIER = 2.0
     private val JITTER_FACTOR = 0.1 // 10% jitter
+
+    // Token retry variables
+    private var isTokenRefreshPending = false
+    private var refreshRetries = 0
+    private val MAX_REFRESH_RETRIES = 3
+    private val REFRESH_TIMEOUT_MS = 10000L  // 10 seconds
+    private val INITIAL_RETRY_DELAY_MS = 50000L  // 5 seconds
+    private var currentRetryDelay = INITIAL_RETRY_DELAY_MS
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,12 +66,14 @@ class PrintService : Service() {
 
         // For token refresh
 //        private const val TOKEN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
-        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 15min
+//        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 15min
+        private const val TOKEN_CHECK_INTERVAL_MS = 5 * 60 * 1000L // 15min
         private const val TOKEN_EXPIRY_THRESHOLD_HOURS = 24L // Refresh if within 24 hours
         private const val MAX_BACKOFF_MS = 30000L // 30 seconds max backoff
-        fun handleDisconnection() {
-            instance?.resetReconnectionState()
-            instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
+        suspend fun handleDisconnection() {
+            instance?.handleRefreshTimeout()
+//            instance?.resetReconnectionState()
+//            instance?.connectWebSocket() ?: Log.e("PrintService", "Cannot connect to webSocket: instance is null")
         }
     }
 
@@ -491,11 +501,11 @@ class PrintService : Service() {
         scope.launch {
 //            var backoffMs = 1000L
             while (true) {
-                if (webSocket != null && !isTokenSet) {
+                if (webSocket != null && !nearExpiry) {
                     checkTokenExpiry()
 //                    backoffMs = 1000L // Reset backoff on success
                 } else {
-                    Log.w("WebSocket", "WebSocket disconnected, deferring token check - isTokenSet: $isTokenSet")
+                    Log.w("WebSocket", "WebSocket disconnected, deferring token check - nearExpiry: $nearExpiry")
 //                    backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
                 }
                 delay(TOKEN_CHECK_INTERVAL_MS)
@@ -506,27 +516,37 @@ class PrintService : Service() {
 
     private suspend fun checkTokenExpiry() {
         val expiryDateStr = authPrefs.getString("expiry_date", null) ?: return
-        Log.e("WebSocket", "expiry_date: $expiryDateStr")
         try {
             val expiryDate = ZonedDateTime.parse(expiryDateStr, DateTimeFormatter.ISO_ZONED_DATE_TIME)
             val now = ZonedDateTime.now()
             if (java.time.Duration.between(now, expiryDate).toHours() <= TOKEN_EXPIRY_THRESHOLD_HOURS) {
+                isTokenRefreshPending = true
+                refreshRetries = 0  // Reset retries on new check
+                currentRetryDelay = INITIAL_RETRY_DELAY_MS
                 Log.i("WebSocket", "Token nearing expiry, requesting refresh")
                 webSocket?.send(JSONObject().apply {
                     put("type", "token_refresh")
                     put("device_id", deviceId)
                 }.toString())
-                isTokenSet = false
+                // Start timeout coroutine
+                scope.launch {
+                    delay(REFRESH_TIMEOUT_MS)
+                    if (isTokenRefreshPending) {
+//                        isTokenRefreshPending = false
+                        Log.w("WebSocket", "Token refresh timeout, initiating retry")
+                        handleRefreshTimeout()
+                    }
+                }
             } else {
-                isTokenSet = true  // Set to true if not nearing expiry
+                Log.e("WebSocket", "Not within expiry window: nearExpiry: $nearExpiry")
             }
         } catch (e: Exception) {
             Log.e("WebSocket", "Failed to parse expiry_date: ${e.message}")
-            isTokenSet = false
         }
     }
 
     private suspend fun handleTokenRefreshed(data: JSONObject) {
+        if (!isTokenRefreshPending) return  // Ignore if not pending - only run if token refresh pending
         val newToken = data.getString("device_token")
         val newExpiryDate = data.optString("expiry_date", "")
         if (newExpiryDate.isNotEmpty()) {
@@ -538,19 +558,65 @@ class PrintService : Service() {
                     apply()
                 }
                 deviceToken = newToken
-//                isTokenSet = true
+                isTokenRefreshPending = false
+                refreshRetries = 0
+                currentRetryDelay = INITIAL_RETRY_DELAY_MS
                 // Confirm saved token
                 val savedToken = authPrefs.getString("device_token", null)
                 val exp = authPrefs.getString("expiry_date", null)
-                Log.i("WebSocket", "Saved device_token in sharedPrefs: $savedToken")
-                Log.i("WebSocket", "Token refreshed, new expiry: $exp")
+                nearExpiry = false
+//                // Reconnect WebSocket with new token to ensure it's used
+//                webSocket?.close(1000, "Token refreshed")
+//                connectWebSocket()
             } catch (e: Exception) {
                 Log.e("WebSocket", "Invalid expiry_date in token_refreshed: ${e.message}")
-                isTokenSet = false
+//                isTokenRefreshPending = false
+//                handleRefreshTimeout()  // Treat as failure and retry
             }
         } else {
             Log.e("WebSocket", "No expiry_date in token_refreshed response, ignoring")
-            isTokenSet = false
+//            isTokenRefreshPending = false
+//            handleRefreshTimeout()  // Treat as failure and retry
+        }
+    }
+
+    private suspend fun handleRefreshTimeout() {
+        if (refreshRetries < MAX_REFRESH_RETRIES) {
+            refreshRetries++
+            Log.w("WebSocket", "Retry $refreshRetries for token refresh")
+            delay(currentRetryDelay)
+            currentRetryDelay *= 5  // Exponential backoff
+            if (currentRetryDelay > 60000L) currentRetryDelay = 60000L  // Cap at 60s
+//            if (webSocket != null && webSocket!!.close(1000, null) == null) {
+            if (webSocket != null ) {
+                webSocket?.send(JSONObject().apply {
+                    put("type", "token_refresh")
+                    put("device_id", deviceId)
+                }.toString())
+                // Restart timeout for retry
+                scope.launch {
+                    delay(REFRESH_TIMEOUT_MS)
+                    if (isTokenRefreshPending) {
+//                        isTokenRefreshPending = false
+                        handleRefreshTimeout()
+                    }
+                }
+            } else {
+                Log.e("WebSocket", "WebSocket disconnected during retry, scheduling re-check")
+                // Wait for reconnection before retrying
+            }
+        } else {
+            Log.e("WebSocket", "Max retries exceeded for token refresh, restarting WebSocket")
+            isTokenRefreshPending = false
+            refreshRetries = 0
+            currentRetryDelay = INITIAL_RETRY_DELAY_MS
+//            webSocket?.close(1000, "Token refresh failed")
+//            connectWebSocket()  // Restart WebSocket to re-authenticate
+            // Schedule re-check in 1 hour
+            scope.launch {
+                delay(60 * 60 * 1000L)
+                checkTokenExpiry()
+            }
         }
     }
 
