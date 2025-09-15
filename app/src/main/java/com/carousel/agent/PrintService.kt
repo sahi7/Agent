@@ -65,9 +65,9 @@ class PrintService : Service() {
         private const val FOREGROUND_NOTIFICATION_ID = 1
 
         // For token refresh
-//        private const val TOKEN_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
+        private const val TOKEN_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L // 12 hours
 //        private const val TOKEN_CHECK_INTERVAL_MS = 30 * 30 * 1000L // 15min
-        private const val TOKEN_CHECK_INTERVAL_MS = 5 * 60 * 1000L // 15min
+//        private const val TOKEN_CHECK_INTERVAL_MS = 5 * 60 * 1000L // 5min
         private const val TOKEN_EXPIRY_THRESHOLD_HOURS = 24L // Refresh if within 24 hours
         private const val MAX_BACKOFF_MS = 30000L // 30 seconds max backoff
         suspend fun handleDisconnection() {
