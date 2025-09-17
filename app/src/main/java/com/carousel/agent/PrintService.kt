@@ -126,13 +126,13 @@ class PrintService : Service() {
                 .header("Authorization", "Token $deviceToken")
                 .addHeader("Device-Id", deviceId)
                 .build()
-            Log.d("WebSocket", "Connecting to URL: ${request.url} with: $deviceId - $deviceToken")
+            Log.d("WebSocket", "Connecting to URL: ${request.url}")
             webSocket = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d("WebSocket", "Connection opened")
-                    Log.d("WebSocket", "Response code: ${response.code}")
+                    Log.d("WebSocket", "Connection opened, with code: ${response.code}")
                     Log.d("WebSocket", "Response headers: ${response.headers}")
                     PrintService.webSocket = webSocket
+                    isReconnecting = false
                     isConnected = true
                     _connectionStatus.value = ConnectionStatus.CONNECTED
                     scope.launch {
@@ -215,17 +215,20 @@ class PrintService : Service() {
                     Log.d("WebSocket", "Received binary message: ${bytes.hex()}")
                 }
 
+                // onClosing is called when the WebSocket is intentionally closed (e.g., with a close code)
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     Log.i("WebSocket", "Closing: $reason")
                     webSocket.close(1000, null)
                     handleDisconnection()
                 }
 
+                // onClosed is triggered when the WebSocket connection is fully closed after onClosing
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.i("WebSocket", "Connection closed - Code: $code, Reason: $reason")
 //                    handleDisconnection()
                 }
 
+                // onFailure is triggered by connection errors (e.g., network issues)
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.e("WebSocket", "Failure: ${t.message}")
                     handleDisconnection()
@@ -239,11 +242,6 @@ class PrintService : Service() {
         isConnected = false
         _connectionStatus.value = ConnectionStatus.DISCONNECTED
         PrintService.webSocket = null
-        PrinterUtils.sendNotification(
-            context = this@PrintService,
-            title = "WebSocket Disconnected",
-            text = "Disconnected from print server"
-        )
         startReconnection()
     }
 
@@ -300,10 +298,11 @@ class PrintService : Service() {
                 }
             }
 
-            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && webSocket == null) {
+            if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !isConnected) {
                 Log.e("WebSocket", "Max reconnection attempts reached. Giving up.")
                 isReconnecting = false
                 _connectionStatus.value = ConnectionStatus.DISCONNECTED
+                webSocket?.close(1000, "Reconnection failed")
                 PrintService.webSocket = null
                 // Notify UI or take appropriate action
                 notifyReconnectionFailed()
